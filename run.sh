@@ -78,7 +78,9 @@ list_used_ports() {
             netstat -lnt 2>/dev/null | awk 'NR>2 {a=$4; sub(/^.*:/, "", a); if (a ~ /^[0-9]+$/) print a}'
         fi
 
-        docker ps --format '{{.Ports}}' 2>/dev/null \
+        # Include stopped containers as well, so a dormant Odoo instance keeps
+        # its reserved host ports and a new instance cannot accidentally reuse them.
+        docker ps -a --format '{{.Ports}}' 2>/dev/null \
             | grep -oE ':[0-9]+->' 2>/dev/null \
             | sed -E 's/^:([0-9]+)->$/\1/' || true
     } | sort -n -u
@@ -171,6 +173,7 @@ sed "s/__ODOO_MASTER_PASSWORD__/${ODOO_MASTER_PASSWORD}/g" \
 # directories to the service users that need them.
 chown -R "${HOST_UID}:${HOST_GID}" .
 chmod 600 .env
+chmod 755 run.sh rebuild.sh
 
 log "Pulling PostgreSQL ${POSTGRES_VERSION} and building Odoo ${ODOO_VERSION}..."
 docker compose pull db
