@@ -1,5 +1,17 @@
-postgresql/
-etc/odoo-server.log
-etc/addons/
-etc/sessions/
-etc/filestore/
+# Runtime secrets and generated configuration
+.env
+config/odoo.conf
+
+# Portable instance runtime data
+data/
+logs/*
+!logs/.gitkeep
+
+# Enterprise code is intentionally local/private
+addons/enterprise/
+
+# Python/editor noise
+__pycache__/
+*.py[cod]
+.vscode/
+.idea/
