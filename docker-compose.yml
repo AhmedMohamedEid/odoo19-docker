@@ -1,46 +1,49 @@
 services:
   db:
-    image: postgres:16
-    user: root
+    image: postgres:${POSTGRES_VERSION:-16}
     environment:
-      - POSTGRES_USER=odoo
-      - POSTGRES_PASSWORD=odoo19@2025
-      - POSTGRES_DB=postgres
-    restart: always             # run as a service
+      POSTGRES_DB: ${POSTGRES_DB:-postgres}
+      POSTGRES_USER: ${POSTGRES_USER:-odoo}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
     volumes:
-        - ./postgresql:/var/lib/postgresql/data
+      - ./data/postgresql:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U odoo"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+    stop_grace_period: 30s
 
   odoo19:
-    image: odoo:19.0
-    user: root
+    build:
+      context: .
+      args:
+        ODOO_VERSION: ${ODOO_VERSION:-19.0}
+    image: ${COMPOSE_PROJECT_NAME:-odoo19}-odoo:${ODOO_VERSION:-19.0}
     depends_on:
-      - db
-    ports:
-      - "10019:8069"
-      - "20019:8072" # live chat
-    tty: true
-    command: --
+      db:
+        condition: service_healthy
     environment:
-      - HOST=db
-      - USER=odoo
-      - PASSWORD=odoo19@2025
+      HOST: db
+      PORT: 5432
+      USER: ${POSTGRES_USER:-odoo}
+      PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    ports:
+      - "${ODOO_PORT:-10019}:8069"
+      - "${ODOO_GEVENT_PORT:-20019}:8072"
     volumes:
-      - /etc/timezone:/etc/timezone:ro
-      - /etc/localtime:/etc/localtime:ro
-      # - ./entrypoint.sh:/entrypoint.sh   # if you want to install additional Python packages, uncomment this line!
-      # - ./addons/enterprise:/mnt/enterprise
-      - ./addons/addons:/mnt/extra-addons
-      - ./etc:/etc/odoo
-    restart: always             # run as a service
+      - ./data/odoo:/var/lib/odoo
+      - ./addons/custom:/mnt/extra-addons
+      - ./addons/enterprise:/mnt/enterprise
+      - ./config/odoo.conf:/etc/odoo/odoo.conf:ro
+      - ./logs:/var/log/odoo
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8069/web/health"]
+      test: ["CMD-SHELL", "curl -fsS 'http://localhost:8069/web/health?db_server_status=1' >/dev/null || exit 1"]
       interval: 30s
       timeout: 10s
-      retries: 3
-      start_period: 60s
-    
+      retries: 5
+      start_period: 90s
+    restart: unless-stopped
+    stop_grace_period: 30s
