@@ -71,6 +71,8 @@ project_name_from_path() {
 }
 
 list_used_ports() {
+    local container_id
+
     {
         if command -v ss >/dev/null 2>&1; then
             ss -H -ltn 2>/dev/null | awk '{a=$4; sub(/^.*:/, "", a); if (a ~ /^[0-9]+$/) print a}'
@@ -78,12 +80,15 @@ list_used_ports() {
             netstat -lnt 2>/dev/null | awk 'NR>2 {a=$4; sub(/^.*:/, "", a); if (a ~ /^[0-9]+$/) print a}'
         fi
 
-        # Include stopped containers as well, so a dormant Odoo instance keeps
-        # its reserved host ports and a new instance cannot accidentally reuse them.
-        docker ps -a --format '{{.Ports}}' 2>/dev/null \
-            | grep -oE ':[0-9]+->' 2>/dev/null \
-            | sed -E 's/^:([0-9]+)->$/\1/' || true
-    } | sort -n -u
+        # Read configured host bindings from every Docker container, including
+        # stopped ones, so dormant instances keep their reserved ports.
+        while IFS= read -r container_id; do
+            [[ -n "${container_id}" ]] || continue
+            docker inspect \
+                --format '{{range $port, $bindings := .HostConfig.PortBindings}}{{range $bindings}}{{println .HostPort}}{{end}}{{end}}' \
+                "${container_id}" 2>/dev/null || true
+        done < <(docker ps -aq 2>/dev/null)
+    } | awk '/^[0-9]+$/' | sort -n -u
 }
 
 mapfile -t USED_PORTS < <(list_used_ports)
