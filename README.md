@@ -1,155 +1,205 @@
-# Quick install
+# Odoo 19 Docker — Portable Multi-Instance Installer
 
-Installing Odoo 19 with one command.
+A small Odoo 19 Docker template designed for fast, repeatable installations while keeping every instance self-contained inside one project directory.
 
-(Supports multiple Odoo instances on one server)
+## What an installed project contains
 
-Install [docker](https://docs.docker.com/get-docker/) and [docker-compose](https://docs.docker.com/compose/install/) yourself, then run:
-
-``` bash
-curl -s https://raw.githubusercontent.com/AhmedMohamedEid/odoo19-docker/master/run.sh | sudo bash -s odoo-one 10019 20019
+```text
+customer-sa/
+├── addons/
+│   ├── custom/              # custom addons
+│   └── enterprise/          # optional/private enterprise addons
+├── config/
+│   ├── odoo.conf            # generated instance configuration
+│   └── odoo.conf.example
+├── data/
+│   ├── odoo/                # filestore, sessions and Odoo runtime data
+│   └── postgresql/          # PostgreSQL data directory
+├── logs/
+│   └── odoo-server.log
+├── requirements/
+│   ├── requirements.txt     # custom Python packages
+│   └── apt.txt              # custom Ubuntu/system packages
+├── .env                     # generated ports and DB credentials
+├── Dockerfile
+├── docker-compose.yml
+├── rebuild.sh
+└── run.sh
 ```
 
-to set up first Odoo instance @ `localhost:10019` (default master password: `admin@123`)
+The host-side data stays inside this directory. Inside the containers, standard Odoo/PostgreSQL paths are used:
 
-and
+- `./data/odoo` -> `/var/lib/odoo`
+- `./data/postgresql` -> `/var/lib/postgresql/data`
+- `./addons/custom` -> `/mnt/extra-addons`
+- `./addons/enterprise` -> `/mnt/enterprise`
+- `./config/odoo.conf` -> `/etc/odoo/odoo.conf`
+- `./logs` -> `/var/log/odoo`
 
-``` bash
-curl -s https://raw.githubusercontent.com/AhmedMohamedEid/odoo19-docker/master/run.sh | sudo bash -s odoo-two 11019 21019
+## Quick install
+
+Docker and Docker Compose v2 must already be installed.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/AhmedMohamedEid/odoo19-docker/main/run.sh \
+  | sudo bash -s /odoo/customer-sa
 ```
 
-to set up another Odoo instance @ `localhost:11019` (default master password: `admin@123`)
+The installer automatically:
 
-Some arguments:
-* First argument (**odoo-one**): Odoo deploy folder
-* Second argument (**10019**): Odoo port
-* Third argument (**20019**): live chat port
+1. Finds the next safe Odoo HTTP port in the `10019-19999` range.
+2. Reserves the matching gevent/WebSocket port at HTTP port + `10000`.
+3. Checks listening system ports and Docker containers, including stopped containers.
+4. Generates random PostgreSQL and Odoo master passwords.
+5. Creates the portable project directory structure.
+6. Pulls PostgreSQL 16 and builds the current `odoo:19.0` based image.
+7. Applies service-specific ownership instead of `chmod 777`.
+8. Waits for PostgreSQL health before starting Odoo.
+9. Starts Odoo and prints the selected ports, URL and master password.
 
-If `curl` is not found, install it:
+The installer intentionally does **not** create an Odoo database. Open Odoo's Database Manager and create the database yourself so you can select the correct country, language and demo-data options.
 
-``` bash
-$ sudo apt-get install curl
-# or
-$ sudo yum install curl
+## Automatic ports
+
+Default ranges:
+
+```text
+Odoo HTTP:       10019 -> 19999
+Gevent/WebSocket: HTTP port + 10000
 ```
 
-# Usage
+Example: if `10019`, `10020` and `10021` are already reserved, a new instance normally receives:
 
-Start the container:
-``` sh
-docker-compose up
+```text
+HTTP:   10022
+Gevent: 20022
 ```
 
-* Then open `localhost:10019` to access Odoo 19.0. If you want to start the server with a different port, change **10019** to another value in **docker-compose.yml**:
+The installer also verifies that both ports are actually free before using them.
 
-```
-ports:
- - "10019:8069"
-```
+The range can be changed for an installation:
 
-Run Odoo container in detached mode (be able to close terminal without stopping Odoo):
-
-```
-docker-compose up -d
+```bash
+sudo ODOO_PORT_START=12000 ODOO_PORT_END=12999 ./run.sh /odoo/customer-sa
 ```
 
-**If you get the permission issue**, change the folder permission to make sure that the container is able to access the directory:
+## Start, stop and status
 
-``` sh
-$ git clone https://github.com/AhmedMohamedEid/odoo19-docker
-$ sudo chmod -R 777 addons
-$ sudo chmod -R 777 etc
-$ mkdir -p postgresql
-$ sudo chmod -R 777 postgresql
+Run commands from the installed project directory:
+
+```bash
+docker compose up -d
+docker compose stop
+docker compose down
+docker compose ps
 ```
 
-Increase maximum number of files watching from 8192 (default) to **524288**. In order to avoid error when we run multiple Odoo instances. This is an *optional step*. These commands are for Ubuntu user:
+Follow the Odoo application log:
 
-```
-$ if grep -qF "fs.inotify.max_user_watches" /etc/sysctl.conf; then echo $(grep -F "fs.inotify.max_user_watches" /etc/sysctl.conf); else echo "fs.inotify.max_user_watches = 524288" | sudo tee -a /etc/sysctl.conf; fi
-$ sudo sysctl -p    # apply new config immediately
-```
-
-# Custom addons
-
-The **addons/** folder contains custom addons. Just put your custom addons if you have any.
-
-# Odoo configuration & log
-
-* To change Odoo configuration, edit file: **etc/odoo.conf**.
-* Log file: **etc/odoo-server.log**
-* Default database password (**admin_passwd**) is `minhng.info`, please change it @ [etc/odoo.conf#L60](/etc/odoo.conf#L60)
-
-# Odoo container management
-
-**Run Odoo**:
-
-``` bash
-docker-compose up -d
+```bash
+tail -f logs/odoo-server.log
 ```
 
-**Restart Odoo**:
+## Custom addons
 
-``` bash
-docker-compose restart
+Put custom modules in:
+
+```text
+addons/custom/
 ```
 
-**Stop Odoo**:
+Optional Enterprise modules can be placed in:
 
-``` bash
-docker-compose down
+```text
+addons/enterprise/
 ```
 
-# Live chat
+Both paths are already present in `addons_path`.
 
-In [docker-compose.yml#L20](docker-compose.yml#L20), we exposed port **20019** for live-chat on host.
+## Custom Python requirements
 
-Configuring **nginx** to activate live chat feature (in production):
+Edit:
 
-``` conf
-#...
-server {
-    #...
-    location /longpolling/ {
-        proxy_pass http://0.0.0.0:20019/longpolling/;
-    }
-    #...
-}
-#...
+```text
+requirements/requirements.txt
 ```
 
-# docker-compose.yml
+Example:
 
-* odoo:19.0
-* postgres:16
+```text
+paramiko==3.5.1
+boto3==1.40.0
+```
 
-# Improvements Added
+Then rebuild the instance image:
 
-Several improvements have been made to the Odoo 19 Docker setup to enhance performance, security, and monitoring:
+```bash
+./rebuild.sh
+```
 
-## 1. Performance Improvements
+To force a clean Docker build:
 
-* **Workers Mode Activation**: 4 workers enabled to improve concurrent request processing
-* **Memory Settings Enhancement**: Increased soft memory limit to 4GB and hard limit to 5GB
-* **Database Settings Optimization**: Increased concurrent connections to 128
+```bash
+./rebuild.sh --no-cache
+```
 
-## 2. Monitoring Improvements
+Python dependencies are installed at image build time, not every time Odoo restarts.
 
-* **Health Checks**: Added health checks for PostgreSQL and Odoo services
-* **Logging Enhancement**: Activated appropriate log levels and configured log handlers
-* **Time Settings**: Enabled local time synchronization with the host system
+## Custom system packages
 
-## 3. Structural Improvements
+For packages that must be installed with `apt`, edit:
 
-* **Service Name Correction**: Changed service name from odoo18 to odoo19
-* **Version Updates**: Updated PostgreSQL to version 16
+```text
+requirements/apt.txt
+```
 
-# Odoo 19 screenshots
+Example:
 
-<img src="screenshots/odoo-15-welcome-screenshot.png" width="50%">
+```text
+ffmpeg
+unixodbc
+```
 
-<img src="screenshots/odoo-15-apps-screenshot.png" width="100%">
+Then run:
 
-<img src="screenshots/odoo-15-sales-screen.png" width="100%">
+```bash
+./rebuild.sh
+```
 
-<img src="screenshots/odoo-15-product-form.png" width="100%">
+## Configuration
+
+Runtime configuration is generated at:
+
+```text
+config/odoo.conf
+```
+
+The generated configuration uses:
+
+- `/var/lib/odoo` as Odoo's data directory.
+- `/var/log/odoo/odoo-server.log` as the application log.
+- 2 workers and 1 cron thread as conservative portable defaults.
+- Database Manager enabled.
+- `proxy_mode = False` by default.
+
+Only set `proxy_mode = True` when the instance is actually behind a correctly configured trusted reverse proxy.
+
+Instance-specific Docker values are stored in `.env`, including the selected ports and PostgreSQL password. `.env`, generated config, database data, filestore and logs are excluded from Git.
+
+## Permissions and security
+
+Odoo and PostgreSQL run with their image-default non-root service users. The installer configures only the runtime directories those users need and does not apply recursive `777` permissions.
+
+No production passwords are stored in this public repository. Each installation receives fresh random credentials.
+
+## Moving an instance directory
+
+The layout is intentionally self-contained. If you want to move the raw project directory, stop its containers first:
+
+```bash
+docker compose down
+```
+
+Then move/copy the complete project directory together. Do not copy a live PostgreSQL data directory while PostgreSQL is writing to it.
+
+This repository currently focuses on installation and runtime structure. Database backup/restore tooling is intentionally outside the current scope.
