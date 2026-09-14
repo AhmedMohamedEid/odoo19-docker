@@ -10,8 +10,9 @@ log_level = info
 # Keep the database manager available so the country/language can be selected manually.
 list_db = True
 
-# Enable only when Odoo is behind a correctly configured trusted reverse proxy.
-proxy_mode = False
+# Instances are bound to localhost by default and are intended to be published
+# through a trusted reverse proxy with X-Forwarded-Host / X-Forwarded-Proto.
+proxy_mode = True
 
 # Conservative defaults for a portable multi-instance host.
 workers = 2
