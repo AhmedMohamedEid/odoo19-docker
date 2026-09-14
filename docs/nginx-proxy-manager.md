@@ -1,92 +1,75 @@
 # Nginx Proxy Manager + Odoo 19
 
-This template is designed to let Nginx Proxy Manager (NPM) reach each Odoo
-instance over a shared private Docker network while the host-published Odoo
-ports remain bound to 127.0.0.1.
-
-## One-time NPM network connection
-
-The installer creates the external Docker network:
+The preferred production path is:
 
 ```text
-odoo-proxy
+Browser
+  -> HTTPS hostname
+  -> Nginx Proxy Manager
+  -> shared private Docker network
+  -> Odoo container
 ```
 
-Connect the Nginx Proxy Manager application/container to that network once.
+The Odoo host ports remain bound to `127.0.0.1` for local diagnostics only and
+are not the normal public path.
 
-Find the NPM container name:
+## Shared proxy network
 
-```bash
-docker ps --format 'table {{.Names}}\t{{.Image}}' | grep -i 'nginx-proxy-manager\|jc21'
-```
+The installer selects the proxy network in this order:
 
-Then connect it:
+1. an explicit `PROXY_NETWORK` value, if supplied;
+2. an existing `proxy-tier` network;
+3. an existing `odoo-proxy` network;
+4. otherwise it creates `odoo-proxy`.
 
-```bash
-docker network connect odoo-proxy <NPM_CONTAINER_NAME>
-```
+On the audited production server, Nginx Proxy Manager already uses
+`proxy-tier`, so new instances reuse that existing network instead of creating
+a parallel proxy network.
 
-Running the command again on an already-connected container is unnecessary.
-
-Verify:
-
-```bash
-docker network inspect odoo-proxy
-```
-
-Each installed Odoo instance is attached automatically to this network.
-
-## Proxy Host
-
-Assume the project directory is named:
+Each new Odoo instance gets a unique Docker-network alias:
 
 ```text
-customer-sa
+<project>-odoo
 ```
 
-The installer uses:
+Example:
 
 ```text
-COMPOSE_PROJECT_NAME=customer-sa
+customer-sa-odoo
 ```
 
-and the Odoo container is therefore:
+## Proxy Host for the default template
 
-```text
-customer-sa-odoo19
-```
+The default template uses `workers = 2`, therefore Odoo runs in
+multiprocessing mode.
 
-In Nginx Proxy Manager create a Proxy Host:
+Configure the main NPM Proxy Host:
 
-- Domain Names: your Odoo subdomain, e.g. `erp.customer.com`
+- Domain Names: e.g. `erp.customer.com`
 - Scheme: `http`
-- Forward Hostname / IP: `customer-sa-odoo19`
+- Forward Hostname / IP: `customer-sa-odoo`
 - Forward Port: `8069`
 - Websockets Support: enabled
-- Block Common Exploits: enabled if compatible with your deployment
-- SSL: request/use a certificate and enable Force SSL
+- SSL: certificate + Force SSL
 
-Do not forward the normal Proxy Host to the host's public IP and do not use the
-host-mapped 100xx port when NPM is on the shared Docker network.
+Do not point NPM at the server public IP or the host-mapped 100xx port when NPM
+and Odoo share a Docker network.
 
-## Required /websocket custom location
+## /websocket routing when workers > 0
 
-Odoo 19 with workers enabled serves WebSocket traffic on the gevent port 8072,
-not on the normal HTTP port 8069.
+With Odoo multiprocessing/gevent mode (`workers > 0`), WebSocket traffic uses
+the gevent port 8072.
 
-In the same NPM Proxy Host add a Custom Location:
+Add a Custom Location:
 
 ```text
 Location: /websocket
 Scheme: http
-Forward Hostname / IP: customer-sa-odoo19
+Forward Hostname / IP: customer-sa-odoo
 Forward Port: 8072
 ```
 
-Enable WebSocket support for the location where the NPM version exposes that
-option.
-
-If the Custom Location has an Advanced configuration field, use:
+If an Advanced field is available:
 
 ```nginx
 proxy_http_version 1.1;
@@ -99,38 +82,54 @@ proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 proxy_set_header X-Real-IP $remote_addr;
 ```
 
-The main Proxy Host and the `/websocket` custom location must point to the
-same Odoo container but different internal ports:
+Result:
 
 ```text
-/           -> customer-sa-odoo19:8069
-/websocket  -> customer-sa-odoo19:8072
+/           -> customer-sa-odoo:8069
+/websocket  -> customer-sa-odoo:8072
 ```
 
-## Test the WebSocket route
+## Important: workers = 0 is different
 
-First verify that NPM can resolve the Odoo container from inside its own
-container:
+Do not blindly copy the 8072 rule to legacy Odoo instances running the default
+threaded mode (`workers = 0` or workers unset).
+
+In Odoo's default threaded mode, the gevent port is not used. Those instances
+must be assessed separately; the fact that a host maps 200xx -> 8072 does not
+mean a gevent worker is actually listening there.
+
+This distinction is especially important when migrating older live projects.
+
+## Verify
+
+Check that NPM can resolve the Odoo alias:
 
 ```bash
-docker exec <NPM_CONTAINER_NAME> getent hosts customer-sa-odoo19
+docker exec <NPM_CONTAINER_NAME> getent hosts customer-sa-odoo
 ```
 
-Then inspect the browser Developer Tools -> Network -> WS section while Odoo is
-open. The `/websocket` request should upgrade successfully instead of
-returning 400/404/502.
+For a multiprocessing instance, open browser Developer Tools -> Network -> WS.
+The `/websocket` request should upgrade successfully, typically with HTTP 101.
 
-A failed Odoo WebSocket normally shows in the UI as:
+A routing error commonly appears in Odoo as:
 
 ```text
 Real-time connection lost
 ```
 
+and may produce a server-side error saying the websocket was not opened on the
+evented port.
+
 ## Session isolation
 
-Use a different hostname/subdomain for each Odoo instance. Do not configure NPM
-to rewrite the Odoo `session_id` cookie onto a shared parent domain such as
-`.example.com`.
+Keep a separate hostname/subdomain per Odoo instance and keep the
+`session_id` cookie host-only.
 
-The shared Docker proxy network does not share browser sessions; it is only
-private backend connectivity between NPM and Odoo.
+Do not add NPM cookie rewriting such as:
+
+```text
+Domain=.example.com
+```
+
+The audited server currently has host-only Odoo session cookies, so that
+behavior should be preserved.
