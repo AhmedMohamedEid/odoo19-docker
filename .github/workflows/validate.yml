@@ -1,0 +1,25 @@
+name: Validate Odoo 19 Docker template
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare generated files
+        run: |
+          cp .env.example .env
+          sed 's/__ODOO_MASTER_PASSWORD__/validation-only/g' config/odoo.conf.example > config/odoo.conf
+
+      - name: Validate shell scripts
+        run: |
+          bash -n run.sh
+          bash -n rebuild.sh
+
+      - name: Validate Docker Compose
+        run: docker compose config --quiet

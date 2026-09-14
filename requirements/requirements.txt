@@ -1,0 +1,4 @@
+# Add project-specific Python packages here, one per line.
+# Example:
+# paramiko==3.5.1
+# boto3==1.40.0
