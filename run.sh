@@ -9,6 +9,7 @@ GEVENT_OFFSET="${ODOO_GEVENT_OFFSET:-10000}"
 BIND_IP="${ODOO_BIND_IP:-127.0.0.1}"
 ODOO_VERSION="${ODOO_VERSION:-19.0}"
 POSTGRES_VERSION="${POSTGRES_VERSION:-16}"
+PROXY_NETWORK="${PROXY_NETWORK:-odoo-proxy}"
 
 usage() {
     cat <<'EOF'
@@ -27,6 +28,7 @@ Optional environment overrides:
   ODOO_BIND_IP=127.0.0.1
   ODOO_VERSION=19.0
   POSTGRES_VERSION=16
+  PROXY_NETWORK=odoo-proxy
 EOF
 }
 
@@ -166,6 +168,7 @@ cat > .env <<EOF
 COMPOSE_PROJECT_NAME=${PROJECT_NAME}
 ODOO_VERSION=${ODOO_VERSION}
 POSTGRES_VERSION=${POSTGRES_VERSION}
+PROXY_NETWORK=${PROXY_NETWORK}
 ODOO_BIND_IP=${BIND_IP}
 ODOO_PORT=${ODOO_PORT}
 ODOO_GEVENT_PORT=${ODOO_GEVENT_PORT}
@@ -182,6 +185,11 @@ sed "s/__ODOO_MASTER_PASSWORD__/${ODOO_MASTER_PASSWORD}/g" \
 chown -R "${HOST_UID}:${HOST_GID}" .
 chmod 600 .env
 chmod 755 run.sh rebuild.sh
+
+if ! docker network inspect "${PROXY_NETWORK}" >/dev/null 2>&1; then
+    log "Creating shared proxy network ${PROXY_NETWORK}..."
+    docker network create "${PROXY_NETWORK}" >/dev/null
+fi
 
 log "Pulling PostgreSQL ${POSTGRES_VERSION} and building Odoo ${ODOO_VERSION}..."
 docker compose pull db
