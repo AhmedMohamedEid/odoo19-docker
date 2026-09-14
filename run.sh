@@ -9,7 +9,7 @@ GEVENT_OFFSET="${ODOO_GEVENT_OFFSET:-10000}"
 BIND_IP="${ODOO_BIND_IP:-127.0.0.1}"
 ODOO_VERSION="${ODOO_VERSION:-19.0}"
 POSTGRES_VERSION="${POSTGRES_VERSION:-16}"
-PROXY_NETWORK="${PROXY_NETWORK:-odoo-proxy}"
+REQUESTED_PROXY_NETWORK="${PROXY_NETWORK:-}"
 
 usage() {
     cat <<'EOF'
@@ -28,12 +28,21 @@ Optional environment overrides:
   ODOO_BIND_IP=127.0.0.1
   ODOO_VERSION=19.0
   POSTGRES_VERSION=16
-  PROXY_NETWORK=odoo-proxy
+  PROXY_NETWORK=proxy-tier
+
+Proxy network selection when PROXY_NETWORK is omitted:
+  1. reuse proxy-tier if it exists
+  2. reuse odoo-proxy if it exists
+  3. otherwise create odoo-proxy
 EOF
 }
 
 log() {
     printf '\033[1;34m[odoo19]\033[0m %s\n' "$*"
+}
+
+warn() {
+    printf '\033[1;33m[odoo19] WARNING:\033[0m %s\n' "$*" >&2
 }
 
 fail() {
@@ -74,6 +83,35 @@ project_name_from_path() {
     printf '%s' "${raw}"
 }
 
+network_exists() {
+    docker network inspect "$1" >/dev/null 2>&1
+}
+
+select_proxy_network() {
+    if [[ -n "${REQUESTED_PROXY_NETWORK}" ]]; then
+        if ! network_exists "${REQUESTED_PROXY_NETWORK}"; then
+            log "Creating explicitly requested proxy network ${REQUESTED_PROXY_NETWORK}..."
+            docker network create "${REQUESTED_PROXY_NETWORK}" >/dev/null
+        fi
+        printf '%s' "${REQUESTED_PROXY_NETWORK}"
+        return
+    fi
+
+    if network_exists "proxy-tier"; then
+        printf '%s' "proxy-tier"
+        return
+    fi
+
+    if network_exists "odoo-proxy"; then
+        printf '%s' "odoo-proxy"
+        return
+    fi
+
+    log "No shared proxy network detected; creating odoo-proxy..."
+    docker network create "odoo-proxy" >/dev/null
+    printf '%s' "odoo-proxy"
+}
+
 list_used_ports() {
     local container_id
 
@@ -84,8 +122,6 @@ list_used_ports() {
             netstat -lnt 2>/dev/null | awk 'NR>2 {a=$4; sub(/^.*:/, "", a); if (a ~ /^[0-9]+$/) print a}'
         fi
 
-        # Read configured host bindings from every Docker container, including
-        # stopped ones, so dormant instances keep their reserved ports.
         while IFS= read -r container_id; do
             [[ -n "${container_id}" ]] || continue
             docker inspect \
@@ -131,7 +167,6 @@ find_port_pair() {
         candidate=$((candidate + 1))
     done
 
-    # If the upper end of the range is occupied, reuse the first safe gap.
     candidate="${PORT_START}"
     while (( candidate <= PORT_END )); do
         gevent=$((candidate + GEVENT_OFFSET))
@@ -146,6 +181,7 @@ find_port_pair() {
 }
 
 PROJECT_NAME="$(project_name_from_path)"
+PROXY_NETWORK="$(select_proxy_network)"
 read -r ODOO_PORT ODOO_GEVENT_PORT < <(find_port_pair) || fail "No free Odoo port pair was found in ${PORT_START}-${PORT_END}."
 POSTGRES_PASSWORD="$(openssl rand -hex 24)"
 ODOO_MASTER_PASSWORD="$(openssl rand -hex 24)"
@@ -180,16 +216,9 @@ EOF
 sed "s/__ODOO_MASTER_PASSWORD__/${ODOO_MASTER_PASSWORD}/g" \
     config/odoo.conf.example > config/odoo.conf
 
-# Keep the project editable by the invoking user while giving only runtime
-# directories to the service users that need them.
 chown -R "${HOST_UID}:${HOST_GID}" .
 chmod 600 .env
 chmod 755 run.sh rebuild.sh
-
-if ! docker network inspect "${PROXY_NETWORK}" >/dev/null 2>&1; then
-    log "Creating shared proxy network ${PROXY_NETWORK}..."
-    docker network create "${PROXY_NETWORK}" >/dev/null
-fi
 
 log "Pulling PostgreSQL ${POSTGRES_VERSION} and building Odoo ${ODOO_VERSION}..."
 docker compose pull db
@@ -225,6 +254,22 @@ else
     docker compose up -d
 fi
 
+PROXY_ALIAS="${PROJECT_NAME}-odoo"
+
+NPM_CONTAINER="$(
+    docker ps --format '{{.Names}} {{.Image}}' 2>/dev/null \
+      | awk 'tolower($0) ~ /nginx-proxy-manager|jc21\/nginx-proxy-manager/ {print $1; exit}'
+)"
+
+if [[ -n "${NPM_CONTAINER}" ]]; then
+    if ! docker inspect "${NPM_CONTAINER}" \
+        --format '{{range $name, $_ := .NetworkSettings.Networks}}{{println $name}}{{end}}' \
+        | grep -Fxq "${PROXY_NETWORK}"; then
+        warn "Nginx Proxy Manager container ${NPM_CONTAINER} is not attached to ${PROXY_NETWORK}."
+        warn "Attach it once before using Docker-DNS proxying: docker network connect ${PROXY_NETWORK} ${NPM_CONTAINER}"
+    fi
+fi
+
 printf '\n'
 printf '============================================================\n'
 printf ' Odoo 19 instance created successfully\n'
@@ -234,6 +279,9 @@ printf ' Bind address      : %s\n' "${BIND_IP}"
 printf ' Odoo HTTP port    : %s\n' "${ODOO_PORT}"
 printf ' Gevent/WS port    : %s\n' "${ODOO_GEVENT_PORT}"
 printf ' Local backend URL : http://127.0.0.1:%s\n' "${ODOO_PORT}"
+printf ' Proxy network     : %s\n' "${PROXY_NETWORK}"
+printf ' NPM HTTP target   : %s:8069\n' "${PROXY_ALIAS}"
+printf ' NPM WS target     : %s:8072\n' "${PROXY_ALIAS}"
 printf ' Master password   : %s\n' "${ODOO_MASTER_PASSWORD}"
 printf ' Database          : not created (create it from Odoo)\n'
 printf ' Runtime data      : %s/data\n' "$(pwd)"
@@ -241,10 +289,5 @@ printf ' Odoo log          : %s/logs/odoo-server.log\n' "$(pwd)"
 printf ' Custom addons     : %s/addons/custom\n' "$(pwd)"
 printf ' Python packages   : %s/requirements/requirements.txt\n' "$(pwd)"
 printf ' System packages   : %s/requirements/apt.txt\n' "$(pwd)"
-if [[ "${BIND_IP}" == "127.0.0.1" || "${BIND_IP}" == "::1" ]]; then
-    printf ' External access   : configure a unique HTTPS subdomain/reverse proxy\n'
-else
-    SERVER_IP="$(hostname -I 2>/dev/null | awk '{print $1}' || true)"
-    [[ -n "${SERVER_IP}" ]] && printf ' Server URL        : http://%s:%s\n' "${SERVER_IP}" "${ODOO_PORT}"
-fi
+printf ' External access   : configure a unique HTTPS hostname in Nginx Proxy Manager\n'
 printf '============================================================\n'
