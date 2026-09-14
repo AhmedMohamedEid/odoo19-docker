@@ -170,6 +170,35 @@ If strict saved-password isolation is important for administrators managing many
 
 Changing the Odoo session configuration cannot reliably force the browser's built-in password manager to stop suggesting credentials from sibling subdomains.
 
+## Nginx Proxy Manager
+
+For Nginx Proxy Manager deployments, the installer creates/uses the external Docker network:
+
+```text
+odoo-proxy
+```
+
+Each Odoo container joins that network with a unique container name based on the project, for example:
+
+```text
+customer-sa-odoo19
+```
+
+Connect the Nginx Proxy Manager container to `odoo-proxy` once. Then configure:
+
+```text
+/           -> customer-sa-odoo19:8069
+/websocket  -> customer-sa-odoo19:8072
+```
+
+The `/websocket` route is required for Odoo 19 real-time messaging when workers are enabled. Simply enabling NPM's general "Websockets Support" while forwarding everything to 8069 does not reroute Odoo's WebSocket endpoint to its gevent port.
+
+Detailed instructions are in:
+
+```text
+docs/nginx-proxy-manager.md
+```
+
 ## Start, stop and status
 
 Run commands from the installed project directory:
