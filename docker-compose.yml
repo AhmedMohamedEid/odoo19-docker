@@ -22,6 +22,7 @@ services:
       args:
         ODOO_VERSION: ${ODOO_VERSION:-19.0}
     image: ${COMPOSE_PROJECT_NAME:-odoo19}-odoo:${ODOO_VERSION:-19.0}
+    container_name: ${COMPOSE_PROJECT_NAME:-odoo19}-odoo19
     depends_on:
       db:
         condition: service_healthy
@@ -39,6 +40,9 @@ services:
       - ./addons/enterprise:/mnt/enterprise
       - ./config/odoo.conf:/etc/odoo/odoo.conf:ro
       - ./logs:/var/log/odoo
+    networks:
+      - default
+      - proxy
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS 'http://localhost:8069/web/health?db_server_status=1' >/dev/null || exit 1"]
       interval: 30s
@@ -47,3 +51,8 @@ services:
       start_period: 90s
     restart: unless-stopped
     stop_grace_period: 30s
+
+networks:
+  proxy:
+    name: ${PROXY_NETWORK:-odoo-proxy}
+    external: true
