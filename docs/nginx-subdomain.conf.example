@@ -1,0 +1,57 @@
+# Example Nginx reverse proxy for one Odoo 19 instance.
+# Replace:
+#   __DOMAIN__            -> erp-client.example.com
+#   __ODOO_PORT__         -> the instance HTTP port (for example 10019)
+#   __ODOO_GEVENT_PORT__  -> the instance gevent/WebSocket port (for example 20019)
+#
+# IMPORTANT:
+# - Odoo backend ports are expected to listen on 127.0.0.1 by default.
+# - Do not set a parent cookie domain such as Domain=.example.com.
+#   Odoo's session_id cookie should remain host-scoped so sibling
+#   subdomains have independent browser sessions.
+# - Put the map directive in the http{} context if it does not already exist.
+
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name __DOMAIN__;
+
+    # SSL certificate directives are intentionally omitted here because
+    # they are normally managed by Plesk, Certbot, or the host platform.
+
+    client_max_body_size 128m;
+    proxy_connect_timeout 120s;
+    proxy_send_timeout 720s;
+    proxy_read_timeout 720s;
+
+    location /websocket {
+        proxy_pass http://127.0.0.1:__ODOO_GEVENT_PORT__;
+        proxy_http_version 1.1;
+
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+
+    location / {
+        proxy_pass http://127.0.0.1:__ODOO_PORT__;
+        proxy_http_version 1.1;
+
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Real-IP $remote_addr;
+
+        proxy_redirect off;
+    }
+}
