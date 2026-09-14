@@ -22,7 +22,6 @@ services:
       args:
         ODOO_VERSION: ${ODOO_VERSION:-19.0}
     image: ${COMPOSE_PROJECT_NAME:-odoo19}-odoo:${ODOO_VERSION:-19.0}
-    container_name: ${COMPOSE_PROJECT_NAME:-odoo19}-odoo19
     depends_on:
       db:
         condition: service_healthy
@@ -41,8 +40,10 @@ services:
       - ./config/odoo.conf:/etc/odoo/odoo.conf:ro
       - ./logs:/var/log/odoo
     networks:
-      - default
-      - proxy
+      default: {}
+      proxy:
+        aliases:
+          - "${COMPOSE_PROJECT_NAME:-odoo19}-odoo"
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS 'http://localhost:8069/web/health?db_server_status=1' >/dev/null || exit 1"]
       interval: 30s
@@ -54,5 +55,5 @@ services:
 
 networks:
   proxy:
-    name: ${PROXY_NETWORK:-odoo-proxy}
+    name: ${PROXY_NETWORK:?PROXY_NETWORK is required}
     external: true
