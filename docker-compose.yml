@@ -31,8 +31,8 @@ services:
       USER: ${POSTGRES_USER:-odoo}
       PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
     ports:
-      - "${ODOO_PORT:-10019}:8069"
-      - "${ODOO_GEVENT_PORT:-20019}:8072"
+      - "${ODOO_BIND_IP:-127.0.0.1}:${ODOO_PORT:-10019}:8069"
+      - "${ODOO_BIND_IP:-127.0.0.1}:${ODOO_GEVENT_PORT:-20019}:8072"
     volumes:
       - ./data/odoo:/var/lib/odoo
       - ./addons/custom:/mnt/extra-addons
