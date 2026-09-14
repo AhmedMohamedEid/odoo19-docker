@@ -172,26 +172,30 @@ Changing the Odoo session configuration cannot reliably force the browser's buil
 
 ## Nginx Proxy Manager
 
-For Nginx Proxy Manager deployments, the installer creates/uses the external Docker network:
+For Nginx Proxy Manager deployments, the installer reuses an existing shared proxy network when possible. On the audited production host it detects and reuses:
 
 ```text
-odoo-proxy
+proxy-tier
 ```
 
-Each Odoo container joins that network with a unique container name based on the project, for example:
+If no known proxy network exists, it creates `odoo-proxy`.
+
+Each Odoo container joins that network with a unique Docker-network alias based on the project, for example:
 
 ```text
-customer-sa-odoo19
+customer-sa-odoo
 ```
 
 Connect the Nginx Proxy Manager container to `odoo-proxy` once. Then configure:
 
 ```text
-/           -> customer-sa-odoo19:8069
-/websocket  -> customer-sa-odoo19:8072
+/           -> customer-sa-odoo:8069
+/websocket  -> customer-sa-odoo:8072
 ```
 
-The `/websocket` route is required for Odoo 19 real-time messaging when workers are enabled. Simply enabling NPM's general "Websockets Support" while forwarding everything to 8069 does not reroute Odoo's WebSocket endpoint to its gevent port.
+The `/websocket` route to 8072 is required when Odoo runs with `workers > 0` (the default template uses 2 workers). Simply enabling NPM's general "Websockets Support" while forwarding everything to 8069 does not reroute Odoo's WebSocket endpoint to its gevent port.
+
+Legacy projects with `workers = 0` are different: Odoo's gevent port is not used in default threaded mode, so do not blindly add a 8072 route to those projects.
 
 Detailed instructions are in:
 
