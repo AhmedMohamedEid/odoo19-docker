@@ -15,6 +15,8 @@ customer-sa/
 ├── data/
 │   ├── odoo/                # filestore, sessions and Odoo runtime data
 │   └── postgresql/          # PostgreSQL data directory
+├── docs/
+│   └── nginx-subdomain.conf.example
 ├── logs/
 │   └── odoo-server.log
 ├── requirements/
@@ -55,7 +57,8 @@ The installer automatically:
 6. Pulls PostgreSQL 16 and builds the current `odoo:19.0` based image.
 7. Applies service-specific ownership instead of `chmod 777`.
 8. Waits for PostgreSQL health before starting Odoo.
-9. Starts Odoo and prints the selected ports, URL and master password.
+9. Binds Odoo backend ports to `127.0.0.1` by default.
+10. Starts Odoo and prints the selected ports and master password.
 
 The installer intentionally does **not** create an Odoo database. Open Odoo's Database Manager and create the database yourself so you can select the correct country, language and demo-data options.
 
@@ -64,7 +67,7 @@ The installer intentionally does **not** create an Odoo database. Open Odoo's Da
 Default ranges:
 
 ```text
-Odoo HTTP:       10019 -> 19999
+Odoo HTTP:        10019 -> 19999
 Gevent/WebSocket: HTTP port + 10000
 ```
 
@@ -82,6 +85,90 @@ The range can be changed for an installation:
 ```bash
 sudo ODOO_PORT_START=12000 ODOO_PORT_END=12999 ./run.sh /odoo/customer-sa
 ```
+
+## Backend bind address
+
+By default each Odoo instance is published only on localhost:
+
+```text
+ODOO_BIND_IP=127.0.0.1
+```
+
+This means the raw Odoo ports are not exposed directly to the internet. Publish each instance through its own HTTPS subdomain and reverse proxy instead.
+
+If a special deployment genuinely requires public/direct port access, the bind address can be overridden:
+
+```bash
+sudo ODOO_BIND_IP=0.0.0.0 ./run.sh /odoo/customer-sa
+```
+
+Direct public binding is not recommended for normal production deployments.
+
+## Subdomains and session isolation
+
+Use a unique hostname for every instance, for example:
+
+```text
+client-a.example.com -> 127.0.0.1:10019
+client-b.example.com -> 127.0.0.1:10020
+client-c.example.com -> 127.0.0.1:10021
+```
+
+The matching WebSocket/gevent ports would normally be `20019`, `20020`, and `20021`.
+
+Do not use the same IP address with different ports as the normal browser URL when you need simultaneous logins to multiple Odoo instances. Browser cookies are scoped by host/domain and path, not by TCP port, while Odoo uses the common `session_id` cookie name. Two URLs such as:
+
+```text
+http://203.0.113.10:10019
+http://203.0.113.10:10020
+```
+
+can therefore compete for the same browser cookie.
+
+With unique subdomains, keep the Odoo session cookie host-scoped. Do **not** add reverse-proxy configuration that rewrites it to a shared parent domain such as:
+
+```text
+Domain=.example.com
+```
+
+The repository contains a reference Nginx configuration:
+
+```text
+docs/nginx-subdomain.conf.example
+```
+
+It passes the correct `Host`, `X-Forwarded-Host`, `X-Forwarded-Proto`, client IP headers, and WebSocket upgrade headers.
+
+The generated Odoo config enables `proxy_mode = True` because the secure default is now localhost backend ports behind a trusted reverse proxy.
+
+### Diagnosing unexpected cross-subdomain logout
+
+For each public hostname, inspect the response cookie:
+
+```bash
+curl -skD - -o /dev/null https://client-a.example.com/web/login \
+  | grep -i '^set-cookie:.*session_id'
+```
+
+Repeat for the second hostname.
+
+The `session_id` cookie should not be rewritten to a shared parent `Domain=example.com`. In browser developer tools, each hostname should also have its own `session_id` cookie.
+
+If an old parent-domain cookie already exists from a previous proxy configuration, remove that legacy cookie once after correcting the proxy configuration.
+
+## Saved passwords across sibling subdomains
+
+Session isolation and password-manager suggestions are separate issues.
+
+Browsers such as Chrome can intentionally suggest saved credentials across sibling subdomains that belong to the same site. That does **not** mean the Odoo sessions are shared.
+
+If strict saved-password isolation is important for administrators managing many customer instances, use one of these approaches:
+
+- Use a password manager with per-host URI matching.
+- Use customer-owned/custom domains where appropriate.
+- Use separate browser profiles for strongly separated administration contexts.
+
+Changing the Odoo session configuration cannot reliably force the browser's built-in password manager to stop suggesting credentials from sibling subdomains.
 
 ## Start, stop and status
 
@@ -180,11 +267,10 @@ The generated configuration uses:
 - `/var/log/odoo/odoo-server.log` as the application log.
 - 2 workers and 1 cron thread as conservative portable defaults.
 - Database Manager enabled.
-- `proxy_mode = False` by default.
+- `proxy_mode = True`.
+- localhost-only backend publishing by default.
 
-Only set `proxy_mode = True` when the instance is actually behind a correctly configured trusted reverse proxy.
-
-Instance-specific Docker values are stored in `.env`, including the selected ports and PostgreSQL password. `.env`, generated config, database data, filestore and logs are excluded from Git.
+Instance-specific Docker values are stored in `.env`, including the selected ports, bind address and PostgreSQL password. `.env`, generated config, database data, filestore and logs are excluded from Git.
 
 ## Permissions and security
 
