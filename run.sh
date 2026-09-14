@@ -6,6 +6,7 @@ REPO_REF="${ODOO_DOCKER_REF:-main}"
 PORT_START="${ODOO_PORT_START:-10019}"
 PORT_END="${ODOO_PORT_END:-19999}"
 GEVENT_OFFSET="${ODOO_GEVENT_OFFSET:-10000}"
+BIND_IP="${ODOO_BIND_IP:-127.0.0.1}"
 ODOO_VERSION="${ODOO_VERSION:-19.0}"
 POSTGRES_VERSION="${POSTGRES_VERSION:-16}"
 
@@ -23,6 +24,7 @@ Optional environment overrides:
   ODOO_PORT_START=10019
   ODOO_PORT_END=19999
   ODOO_GEVENT_OFFSET=10000
+  ODOO_BIND_IP=127.0.0.1
   ODOO_VERSION=19.0
   POSTGRES_VERSION=16
 EOF
@@ -164,6 +166,7 @@ cat > .env <<EOF
 COMPOSE_PROJECT_NAME=${PROJECT_NAME}
 ODOO_VERSION=${ODOO_VERSION}
 POSTGRES_VERSION=${POSTGRES_VERSION}
+ODOO_BIND_IP=${BIND_IP}
 ODOO_PORT=${ODOO_PORT}
 ODOO_GEVENT_PORT=${ODOO_GEVENT_PORT}
 POSTGRES_DB=postgres
@@ -214,19 +217,15 @@ else
     docker compose up -d
 fi
 
-SERVER_IP="$(hostname -I 2>/dev/null | awk '{print $1}' || true)"
-
 printf '\n'
 printf '============================================================\n'
 printf ' Odoo 19 instance created successfully\n'
 printf '============================================================\n'
 printf ' Project directory : %s\n' "$(pwd)"
+printf ' Bind address      : %s\n' "${BIND_IP}"
 printf ' Odoo HTTP port    : %s\n' "${ODOO_PORT}"
 printf ' Gevent/WS port    : %s\n' "${ODOO_GEVENT_PORT}"
-printf ' Local URL         : http://localhost:%s\n' "${ODOO_PORT}"
-if [[ -n "${SERVER_IP}" ]]; then
-    printf ' Server URL        : http://%s:%s\n' "${SERVER_IP}" "${ODOO_PORT}"
-fi
+printf ' Local backend URL : http://127.0.0.1:%s\n' "${ODOO_PORT}"
 printf ' Master password   : %s\n' "${ODOO_MASTER_PASSWORD}"
 printf ' Database          : not created (create it from Odoo)\n'
 printf ' Runtime data      : %s/data\n' "$(pwd)"
@@ -234,4 +233,10 @@ printf ' Odoo log          : %s/logs/odoo-server.log\n' "$(pwd)"
 printf ' Custom addons     : %s/addons/custom\n' "$(pwd)"
 printf ' Python packages   : %s/requirements/requirements.txt\n' "$(pwd)"
 printf ' System packages   : %s/requirements/apt.txt\n' "$(pwd)"
+if [[ "${BIND_IP}" == "127.0.0.1" || "${BIND_IP}" == "::1" ]]; then
+    printf ' External access   : configure a unique HTTPS subdomain/reverse proxy\n'
+else
+    SERVER_IP="$(hostname -I 2>/dev/null | awk '{print $1}' || true)"
+    [[ -n "${SERVER_IP}" ]] && printf ' Server URL        : http://%s:%s\n' "${SERVER_IP}" "${ODOO_PORT}"
+fi
 printf '============================================================\n'
