@@ -9,6 +9,9 @@ GEVENT_OFFSET="${ODOO_GEVENT_OFFSET:-10000}"
 BIND_IP="${ODOO_BIND_IP:-127.0.0.1}"
 ODOO_VERSION="${ODOO_VERSION:-19.0}"
 POSTGRES_VERSION="${POSTGRES_VERSION:-16}"
+ODOO_WORKERS="${ODOO_WORKERS:-2}"
+ODOO_MAX_CRON_THREADS="${ODOO_MAX_CRON_THREADS:-1}"
+ODOO_DB_MAXCONN="${ODOO_DB_MAXCONN:-16}"
 REQUESTED_PROXY_NETWORK="${PROXY_NETWORK:-}"
 
 usage() {
@@ -28,6 +31,9 @@ Optional environment overrides:
   ODOO_BIND_IP=127.0.0.1
   ODOO_VERSION=19.0
   POSTGRES_VERSION=16
+  ODOO_WORKERS=2
+  ODOO_MAX_CRON_THREADS=1
+  ODOO_DB_MAXCONN=16
   PROXY_NETWORK=proxy-tier
 
 Proxy network selection when PROXY_NETWORK is omitted:
@@ -57,6 +63,16 @@ fi
 DESTINATION="${1:-}"
 [[ -n "${DESTINATION}" ]] || { usage; exit 1; }
 
+for value_name in PORT_START PORT_END GEVENT_OFFSET ODOO_WORKERS ODOO_MAX_CRON_THREADS ODOO_DB_MAXCONN; do
+    value="${!value_name}"
+    [[ "${value}" =~ ^[0-9]+$ ]] || fail "${value_name} must be a non-negative integer."
+done
+
+(( PORT_START >= 1024 )) || fail "ODOO_PORT_START must be >= 1024."
+(( PORT_END >= PORT_START )) || fail "ODOO_PORT_END must be >= ODOO_PORT_START."
+(( PORT_END + GEVENT_OFFSET <= 65535 )) || fail "Port range + gevent offset exceeds 65535."
+(( ODOO_DB_MAXCONN >= 4 )) || fail "ODOO_DB_MAXCONN must be at least 4."
+
 command -v git >/dev/null 2>&1 || fail "git is required."
 command -v docker >/dev/null 2>&1 || fail "Docker is required."
 docker compose version >/dev/null 2>&1 || fail "Docker Compose v2 is required (docker compose)."
@@ -78,7 +94,8 @@ fi
 project_name_from_path() {
     local raw
     raw="$(basename "${DESTINATION%/}")"
-    raw="$(printf '%s' "${raw}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9_-]+/-/g; s/^[^a-z0-9]+//; s/[-_]+$//')"
+    # Compose project name + Docker DNS alias: lowercase, hyphens only.
+    raw="$(printf '%s' "${raw}" | tr '[:upper:]_' '[:lower:]-' | sed -E 's/[^a-z0-9-]+/-/g; s/^-+//; s/-+$//; s/-+/-/g')"
     [[ -n "${raw}" ]] || raw="odoo19"
     printf '%s' "${raw}"
 }
@@ -89,10 +106,7 @@ network_exists() {
 
 select_proxy_network() {
     if [[ -n "${REQUESTED_PROXY_NETWORK}" ]]; then
-        if ! network_exists "${REQUESTED_PROXY_NETWORK}"; then
-            log "Creating explicitly requested proxy network ${REQUESTED_PROXY_NETWORK}..."
-            docker network create "${REQUESTED_PROXY_NETWORK}" >/dev/null
-        fi
+        network_exists "${REQUESTED_PROXY_NETWORK}" || fail "Requested PROXY_NETWORK does not exist: ${REQUESTED_PROXY_NETWORK}"
         printf '%s' "${REQUESTED_PROXY_NETWORK}"
         return
     fi
@@ -107,7 +121,7 @@ select_proxy_network() {
         return
     fi
 
-    log "No shared proxy network detected; creating odoo-proxy..."
+    log "No shared proxy network detected; creating odoo-proxy..." >&2
     docker network create "odoo-proxy" >/dev/null
     printf '%s' "odoo-proxy"
 }
@@ -160,7 +174,7 @@ find_port_pair() {
 
     while (( candidate <= PORT_END )); do
         gevent=$((candidate + GEVENT_OFFSET))
-        if (( gevent <= 65535 )) && ! port_is_used "${candidate}" && ! port_is_used "${gevent}"; then
+        if ! port_is_used "${candidate}" && ! port_is_used "${gevent}"; then
             printf '%s %s\n' "${candidate}" "${gevent}"
             return 0
         fi
@@ -170,7 +184,7 @@ find_port_pair() {
     candidate="${PORT_START}"
     while (( candidate <= PORT_END )); do
         gevent=$((candidate + GEVENT_OFFSET))
-        if (( gevent <= 65535 )) && ! port_is_used "${candidate}" && ! port_is_used "${gevent}"; then
+        if ! port_is_used "${candidate}" && ! port_is_used "${gevent}"; then
             printf '%s %s\n' "${candidate}" "${gevent}"
             return 0
         fi
@@ -180,7 +194,24 @@ find_port_pair() {
     return 1
 }
 
+resolve_repo_digest() {
+    local tag="$1"
+    local digest
+    digest="$(docker image inspect "${tag}" --format '{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}' 2>/dev/null || true)"
+    if [[ -n "${digest}" ]]; then
+        printf '%s' "${digest}"
+    else
+        printf '%s' "${tag}"
+    fi
+}
+
 PROJECT_NAME="$(project_name_from_path)"
+PROXY_ALIAS="${PROJECT_NAME}-odoo"
+
+if [[ -n "$(docker ps -aq --filter "label=com.docker.compose.project=${PROJECT_NAME}" 2>/dev/null)" ]]; then
+    fail "A Docker Compose project named '${PROJECT_NAME}' already exists. Choose a different destination/project name."
+fi
+
 PROXY_NETWORK="$(select_proxy_network)"
 read -r ODOO_PORT ODOO_GEVENT_PORT < <(find_port_pair) || fail "No free Odoo port pair was found in ${PORT_START}-${PORT_END}."
 POSTGRES_PASSWORD="$(openssl rand -hex 24)"
@@ -200,32 +231,47 @@ mkdir -p \
     config \
     requirements
 
+log "Pulling the latest Odoo ${ODOO_VERSION} and PostgreSQL ${POSTGRES_VERSION} images for this new install..."
+docker pull "odoo:${ODOO_VERSION}" >/dev/null
+docker pull "postgres:${POSTGRES_VERSION}" >/dev/null
+
+ODOO_BASE_IMAGE="$(resolve_repo_digest "odoo:${ODOO_VERSION}")"
+POSTGRES_IMAGE="$(resolve_repo_digest "postgres:${POSTGRES_VERSION}")"
+
 cat > .env <<EOF
 COMPOSE_PROJECT_NAME=${PROJECT_NAME}
 ODOO_VERSION=${ODOO_VERSION}
+ODOO_BASE_IMAGE=${ODOO_BASE_IMAGE}
 POSTGRES_VERSION=${POSTGRES_VERSION}
+POSTGRES_IMAGE=${POSTGRES_IMAGE}
 PROXY_NETWORK=${PROXY_NETWORK}
+ODOO_PROXY_ALIAS=${PROXY_ALIAS}
 ODOO_BIND_IP=${BIND_IP}
 ODOO_PORT=${ODOO_PORT}
 ODOO_GEVENT_PORT=${ODOO_GEVENT_PORT}
+ODOO_WORKERS=${ODOO_WORKERS}
+ODOO_MAX_CRON_THREADS=${ODOO_MAX_CRON_THREADS}
+ODOO_DB_MAXCONN=${ODOO_DB_MAXCONN}
 POSTGRES_DB=postgres
 POSTGRES_USER=odoo
 POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
 EOF
 
-sed "s/__ODOO_MASTER_PASSWORD__/${ODOO_MASTER_PASSWORD}/g" \
+sed \
+    -e "s/__ODOO_MASTER_PASSWORD__/${ODOO_MASTER_PASSWORD}/g" \
+    -e "s/__ODOO_WORKERS__/${ODOO_WORKERS}/g" \
+    -e "s/__ODOO_MAX_CRON_THREADS__/${ODOO_MAX_CRON_THREADS}/g" \
+    -e "s/__ODOO_DB_MAXCONN__/${ODOO_DB_MAXCONN}/g" \
     config/odoo.conf.example > config/odoo.conf
 
 chown -R "${HOST_UID}:${HOST_GID}" .
 chmod 600 .env
-chmod 755 run.sh rebuild.sh
+chmod 755 run.sh rebuild.sh finalize.sh
 
-log "Pulling PostgreSQL ${POSTGRES_VERSION} and building Odoo ${ODOO_VERSION}..."
-docker compose pull db
+log "Building the pinned Odoo image..."
 docker compose build --pull odoo19
 
 ODOO_IMAGE="${PROJECT_NAME}-odoo:${ODOO_VERSION}"
-POSTGRES_IMAGE="postgres:${POSTGRES_VERSION}"
 ODOO_UID="$(docker run --rm --entrypoint sh "${ODOO_IMAGE}" -c 'id -u odoo')"
 ODOO_GID="$(docker run --rm --entrypoint sh "${ODOO_IMAGE}" -c 'id -g odoo')"
 POSTGRES_UID="$(docker run --rm --entrypoint sh "${POSTGRES_IMAGE}" -c 'id -u postgres')"
@@ -254,8 +300,6 @@ else
     docker compose up -d
 fi
 
-PROXY_ALIAS="${PROJECT_NAME}-odoo"
-
 NPM_CONTAINER="$(
     docker ps --format '{{.Names}} {{.Image}}' 2>/dev/null \
       | awk 'tolower($0) ~ /nginx-proxy-manager|jc21\/nginx-proxy-manager/ {print $1; exit}'
@@ -275,13 +319,20 @@ printf '============================================================\n'
 printf ' Odoo 19 instance created successfully\n'
 printf '============================================================\n'
 printf ' Project directory : %s\n' "$(pwd)"
+printf ' Odoo base image   : %s\n' "${ODOO_BASE_IMAGE}"
+printf ' PostgreSQL image  : %s\n' "${POSTGRES_IMAGE}"
 printf ' Bind address      : %s\n' "${BIND_IP}"
 printf ' Odoo HTTP port    : %s\n' "${ODOO_PORT}"
 printf ' Gevent/WS port    : %s\n' "${ODOO_GEVENT_PORT}"
 printf ' Local backend URL : http://127.0.0.1:%s\n' "${ODOO_PORT}"
 printf ' Proxy network     : %s\n' "${PROXY_NETWORK}"
 printf ' NPM HTTP target   : %s:8069\n' "${PROXY_ALIAS}"
-printf ' NPM WS target     : %s:8072\n' "${PROXY_ALIAS}"
+if (( ODOO_WORKERS > 0 )); then
+    printf ' NPM WS target     : %s:8072 (/websocket)\n' "${PROXY_ALIAS}"
+else
+    printf ' NPM WS target     : not required (workers=0 threaded mode)\n'
+fi
+printf ' Workers           : %s HTTP + %s cron\n' "${ODOO_WORKERS}" "${ODOO_MAX_CRON_THREADS}"
 printf ' Master password   : %s\n' "${ODOO_MASTER_PASSWORD}"
 printf ' Database          : not created (create it from Odoo)\n'
 printf ' Runtime data      : %s/data\n' "$(pwd)"
@@ -289,5 +340,6 @@ printf ' Odoo log          : %s/logs/odoo-server.log\n' "$(pwd)"
 printf ' Custom addons     : %s/addons/custom\n' "$(pwd)"
 printf ' Python packages   : %s/requirements/requirements.txt\n' "$(pwd)"
 printf ' System packages   : %s/requirements/apt.txt\n' "$(pwd)"
+printf ' IMPORTANT         : after database creation run ./finalize.sh <database_name>\n'
 printf ' External access   : configure a unique HTTPS hostname in Nginx Proxy Manager\n'
 printf '============================================================\n'
