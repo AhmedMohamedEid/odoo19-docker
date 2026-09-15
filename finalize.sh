@@ -13,6 +13,7 @@ DB_NAME="${1:-}"
 [[ -f .env ]] || { echo "Missing .env." >&2; exit 1; }
 [[ -f config/odoo.conf ]] || { echo "Missing config/odoo.conf." >&2; exit 1; }
 command -v python3 >/dev/null 2>&1 || { echo "python3 is required on the host." >&2; exit 1; }
+docker compose version >/dev/null 2>&1 || { echo "Docker Compose v2 is required." >&2; exit 1; }
 
 set -a
 # shellcheck disable=SC1091
@@ -22,8 +23,8 @@ set +a
 echo "Checking that database '${DB_NAME}' exists..."
 DB_EXISTS="$(
     docker compose exec -T db \
-      psql -U "${POSTGRES_USER}" -d postgres -v ON_ERROR_STOP=1 -v dbname="${DB_NAME}" -tAc \
-      "SELECT 1 FROM pg_database WHERE datname = :'dbname';" \
+      psql -U "${POSTGRES_USER}" -d postgres -v ON_ERROR_STOP=1 -tAc \
+      "SELECT 1 FROM pg_database WHERE datname = '${DB_NAME}';" \
       | tr -d '[:space:]'
 )"
 
@@ -33,7 +34,16 @@ DB_EXISTS="$(
 }
 
 STAMP="$(date +%Y%m%d-%H%M%S)"
-cp -p config/odoo.conf "config/odoo.conf.before-finalize-${STAMP}"
+BACKUP="config/odoo.conf.before-finalize-${STAMP}"
+cp -p config/odoo.conf "${BACKUP}"
+
+rollback() {
+    echo "Finalization failed; restoring previous Odoo config..." >&2
+    cp -p "${BACKUP}" config/odoo.conf
+    docker compose restart odoo19 >/dev/null 2>&1 || true
+}
+
+trap rollback ERR
 
 python3 - "config/odoo.conf" "${DB_NAME}" <<'PY'
 from pathlib import Path
@@ -65,21 +75,22 @@ echo "Restarting Odoo only to apply production database lock-down..."
 docker compose restart odoo19
 
 CID="$(docker compose ps -q odoo19)"
-[[ -n "${CID}" ]] || { echo "Odoo container not found after restart." >&2; exit 1; }
+[[ -n "${CID}" ]] || { echo "Odoo container not found after restart." >&2; false; }
 
 echo "Waiting for Odoo health..."
 for _ in $(seq 1 60); do
     STATUS="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "${CID}")"
     case "${STATUS}" in
         healthy)
+            trap - ERR
             echo "Database Manager disabled and instance locked to database '${DB_NAME}'."
-            echo "Previous config: config/odoo.conf.before-finalize-${STAMP}"
+            echo "Previous config: ${BACKUP}"
             exit 0
             ;;
         unhealthy|exited|dead)
             echo "Odoo became ${STATUS}. Recent logs:" >&2
             docker compose logs --tail=100 odoo19 >&2 || true
-            exit 1
+            false
             ;;
     esac
     sleep 2
@@ -87,4 +98,4 @@ done
 
 echo "Timed out waiting for Odoo to become healthy. Recent logs:" >&2
 docker compose logs --tail=100 odoo19 >&2 || true
-exit 1
+false
