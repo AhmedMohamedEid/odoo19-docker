@@ -1,6 +1,6 @@
 services:
   db:
-    image: postgres:${POSTGRES_VERSION:-16}
+    image: ${POSTGRES_IMAGE:-postgres:16}
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-postgres}
       POSTGRES_USER: ${POSTGRES_USER:-odoo}
@@ -20,7 +20,7 @@ services:
     build:
       context: .
       args:
-        ODOO_VERSION: ${ODOO_VERSION:-19.0}
+        ODOO_BASE_IMAGE: ${ODOO_BASE_IMAGE:-odoo:19.0}
     image: ${COMPOSE_PROJECT_NAME:-odoo19}-odoo:${ODOO_VERSION:-19.0}
     depends_on:
       db:
@@ -43,7 +43,7 @@ services:
       default: {}
       proxy:
         aliases:
-          - "${COMPOSE_PROJECT_NAME:-odoo19}-odoo"
+          - "${ODOO_PROXY_ALIAS:?ODOO_PROXY_ALIAS is required}"
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS 'http://localhost:8069/web/health?db_server_status=1' >/dev/null || exit 1"]
       interval: 30s
