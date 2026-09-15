@@ -1,6 +1,7 @@
 # Runtime secrets and generated configuration
 .env
 config/odoo.conf
+config/odoo.conf.before-finalize-*
 
 # Portable instance runtime data
 data/

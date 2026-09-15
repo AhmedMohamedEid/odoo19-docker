@@ -10,13 +10,20 @@ docker compose version >/dev/null 2>&1 || { echo "Docker Compose v2 is required.
 BUILD_ARGS=(--pull)
 if [[ "${1:-}" == "--no-cache" ]]; then
     BUILD_ARGS+=(--no-cache)
+elif [[ -n "${1:-}" ]]; then
+    echo "Usage: ./rebuild.sh [--no-cache]" >&2
+    exit 1
 fi
 
-echo "Building the Odoo image with current requirements..."
+echo "Building the Odoo image from the pinned base image..."
 docker compose build "${BUILD_ARGS[@]}" odoo19
 
-echo "Applying the rebuilt image..."
-docker compose up -d
+echo "Applying the rebuilt Odoo image only..."
+if docker compose up --help 2>&1 | grep -q -- '--wait'; then
+    docker compose up -d --no-deps --wait odoo19
+else
+    docker compose up -d --no-deps odoo19
+fi
 
-echo "Done. Current service status:"
+echo "Current service status:"
 docker compose ps

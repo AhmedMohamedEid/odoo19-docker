@@ -1,6 +1,6 @@
 services:
   db:
-    image: postgres:${POSTGRES_VERSION:-16}
+    image: ${POSTGRES_IMAGE:-postgres:16}
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-postgres}
       POSTGRES_USER: ${POSTGRES_USER:-odoo}
@@ -20,7 +20,7 @@ services:
     build:
       context: .
       args:
-        ODOO_VERSION: ${ODOO_VERSION:-19.0}
+        ODOO_BASE_IMAGE: ${ODOO_BASE_IMAGE:-odoo:19.0}
     image: ${COMPOSE_PROJECT_NAME:-odoo19}-odoo:${ODOO_VERSION:-19.0}
     depends_on:
       db:
@@ -31,14 +31,19 @@ services:
       USER: ${POSTGRES_USER:-odoo}
       PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
     ports:
-      - "${ODOO_PORT:-10019}:8069"
-      - "${ODOO_GEVENT_PORT:-20019}:8072"
+      - "${ODOO_BIND_IP:-127.0.0.1}:${ODOO_PORT:-10019}:8069"
+      - "${ODOO_BIND_IP:-127.0.0.1}:${ODOO_GEVENT_PORT:-20019}:8072"
     volumes:
       - ./data/odoo:/var/lib/odoo
       - ./addons/custom:/mnt/extra-addons
       - ./addons/enterprise:/mnt/enterprise
       - ./config/odoo.conf:/etc/odoo/odoo.conf:ro
       - ./logs:/var/log/odoo
+    networks:
+      default: {}
+      proxy:
+        aliases:
+          - "${ODOO_PROXY_ALIAS:?ODOO_PROXY_ALIAS is required}"
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS 'http://localhost:8069/web/health?db_server_status=1' >/dev/null || exit 1"]
       interval: 30s
@@ -47,3 +52,8 @@ services:
       start_period: 90s
     restart: unless-stopped
     stop_grace_period: 30s
+
+networks:
+  proxy:
+    name: ${PROXY_NETWORK:?PROXY_NETWORK is required}
+    external: true

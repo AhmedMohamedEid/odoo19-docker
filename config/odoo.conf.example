@@ -7,16 +7,17 @@ data_dir = /var/lib/odoo
 logfile = /var/log/odoo/odoo-server.log
 log_level = info
 
-# Keep the database manager available so the country/language can be selected manually.
+# Enabled only for first-time database creation.
+# Run ./finalize.sh <database_name> after creating the production database.
 list_db = True
 
-# Enable only when Odoo is behind a correctly configured trusted reverse proxy.
-proxy_mode = False
+# The production path is through Nginx Proxy Manager on the private proxy network.
+proxy_mode = True
 
-# Conservative defaults for a portable multi-instance host.
-workers = 2
-max_cron_threads = 1
-db_maxconn = 64
+# Conservative, configurable defaults for a multi-instance host.
+workers = __ODOO_WORKERS__
+max_cron_threads = __ODOO_MAX_CRON_THREADS__
+db_maxconn = __ODOO_DB_MAXCONN__
 
 limit_time_cpu = 60
 limit_time_real = 120
