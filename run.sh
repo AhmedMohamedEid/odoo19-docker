@@ -207,6 +207,7 @@ resolve_repo_digest() {
 
 PROJECT_NAME="$(project_name_from_path)"
 PROXY_ALIAS="${PROJECT_NAME}-odoo"
+DB_NETWORK_ALIAS="${PROJECT_NAME}-db"
 
 if [[ -n "$(docker ps -aq --filter "label=com.docker.compose.project=${PROJECT_NAME}" 2>/dev/null)" ]]; then
     fail "A Docker Compose project named '${PROJECT_NAME}' already exists. Choose a different destination/project name."
@@ -246,6 +247,7 @@ POSTGRES_VERSION=${POSTGRES_VERSION}
 POSTGRES_IMAGE=${POSTGRES_IMAGE}
 PROXY_NETWORK=${PROXY_NETWORK}
 ODOO_PROXY_ALIAS=${PROXY_ALIAS}
+DB_NETWORK_ALIAS=${DB_NETWORK_ALIAS}
 ODOO_BIND_IP=${BIND_IP}
 ODOO_PORT=${ODOO_PORT}
 ODOO_GEVENT_PORT=${ODOO_GEVENT_PORT}
@@ -293,6 +295,7 @@ log "Starting PostgreSQL and Odoo..."
 if docker compose up --help 2>&1 | grep -q -- '--wait'; then
     if ! docker compose up -d --wait; then
         docker compose ps || true
+        docker compose logs --tail=150 db odoo19 || true
         [[ -f logs/odoo-server.log ]] && tail -n 100 logs/odoo-server.log || true
         fail "The instance did not become healthy. Review the status and log above."
     fi
