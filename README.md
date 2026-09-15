@@ -203,6 +203,16 @@ Detailed instructions are in:
 docs/nginx-proxy-manager.md
 ```
 
+## Database DNS isolation
+
+Odoo is connected to both its private project network and the shared proxy network. To prevent Docker DNS collisions with generic service names such as `db`, every installation generates a unique private PostgreSQL alias:
+
+```text
+customer-sa-db
+```
+
+Odoo connects to that alias rather than the generic hostname `db`. PostgreSQL remains only on the project's private/default network and is never attached to the shared proxy network.
+
 ## Start, stop and status
 
 Run commands from the installed project directory:
