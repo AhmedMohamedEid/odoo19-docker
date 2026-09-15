@@ -186,7 +186,7 @@ Each Odoo container joins that network with a unique Docker-network alias based 
 customer-sa-odoo
 ```
 
-Connect the Nginx Proxy Manager container to `odoo-proxy` once. Then configure:
+The Nginx Proxy Manager container must be attached to the **selected** proxy network (`proxy-tier` on the audited server). The installer warns if it detects NPM but NPM is not attached. Then configure:
 
 ```text
 /           -> customer-sa-odoo:8069
@@ -263,7 +263,7 @@ To force a clean Docker build:
 ./rebuild.sh --no-cache
 ```
 
-Python dependencies are installed at image build time, not every time Odoo restarts.
+Python dependencies are installed at image build time, not every time Odoo restarts. Rebuilding keeps the exact Odoo base-image digest selected at installation time, so adding a requirement does not silently upgrade Odoo.
 
 ## Custom system packages
 
@@ -303,7 +303,7 @@ The generated configuration uses:
 - `proxy_mode = True`.
 - localhost-only backend publishing by default.
 
-Instance-specific Docker values are stored in `.env`, including the selected ports, bind address and PostgreSQL password. `.env`, generated config, database data, filestore and logs are excluded from Git.
+Instance-specific Docker values are stored in `.env`, including the selected ports, bind address, PostgreSQL password, proxy alias, worker settings, and the exact Odoo/PostgreSQL image digests pinned at installation time. `.env`, generated config, database data, filestore and logs are excluded from Git.
 
 ## Permissions and security
 
