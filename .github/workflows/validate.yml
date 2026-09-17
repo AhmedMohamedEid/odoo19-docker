@@ -14,7 +14,12 @@ jobs:
       - name: Prepare generated files
         run: |
           cp .env.example .env
-          sed             -e 's/__ODOO_MASTER_PASSWORD__/validation-only/g'             -e 's/__ODOO_WORKERS__/2/g'             -e 's/__ODOO_MAX_CRON_THREADS__/1/g'             -e 's/__ODOO_DB_MAXCONN__/16/g'             config/odoo.conf.example > config/odoo.conf
+          sed \
+            -e 's/__ODOO_MASTER_PASSWORD__/validation-only/g' \
+            -e 's/__ODOO_WORKERS__/2/g' \
+            -e 's/__ODOO_MAX_CRON_THREADS__/1/g' \
+            -e 's/__ODOO_DB_MAXCONN__/16/g' \
+            config/odoo.conf.example > config/odoo.conf
           ! grep -q '__ODOO_' config/odoo.conf
 
       - name: Validate shell scripts
@@ -22,12 +27,15 @@ jobs:
           bash -n run.sh
           bash -n rebuild.sh
           bash -n finalize.sh
+          bash -n upgrade-module.sh
 
       - name: Validate Docker Compose
         run: docker compose config --quiet
 
       - name: Guard unsafe template regressions
         run: |
-          ! grep -R -nE 'user:[[:space:]]*root|chmod[[:space:]]+-R[[:space:]]+777' docker-compose.yml run.sh rebuild.sh finalize.sh
+          ! grep -R -nE 'user:[[:space:]]*root|chmod[[:space:]]+-R[[:space:]]+777' \
+            docker-compose.yml run.sh rebuild.sh finalize.sh upgrade-module.sh
           grep -q '127.0.0.1' docker-compose.yml
           grep -q 'proxy_mode = True' config/odoo.conf.example
+          grep -q 'DB_NETWORK_ALIAS' docker-compose.yml
