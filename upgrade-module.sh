@@ -118,7 +118,20 @@ ODOO_CID="$(docker compose ps -q odoo19 2>/dev/null || true)"
 ODOO_WAS_RUNNING=0
 if [[ -n "${ODOO_CID}" ]]; then
     ODOO_STATE="$(docker inspect --format '{{.State.Status}}' "${ODOO_CID}" 2>/dev/null || true)"
-    [[ "${ODOO_STATE}" == "running" ]] && ODOO_WAS_RUNNING=1
+    case "${ODOO_STATE}" in
+        running)
+            ODOO_WAS_RUNNING=1
+            ;;
+        exited|created|dead|'')
+            ODOO_WAS_RUNNING=0
+            ;;
+        restarting|paused|removing)
+            fail "Odoo container state is '${ODOO_STATE}'. Stabilize the service before upgrading modules."
+            ;;
+        *)
+            fail "Unexpected Odoo container state: ${ODOO_STATE}"
+            ;;
+    esac
 fi
 
 if (( ASSUME_YES == 0 )); then
@@ -133,9 +146,11 @@ if (( ASSUME_YES == 0 )); then
 fi
 
 wait_for_odoo_health() {
-    local cid status
+    local cid status has_health
     cid="$(docker compose ps -q odoo19 2>/dev/null || true)"
     [[ -n "${cid}" ]] || return 1
+
+    has_health="$(docker inspect --format '{{if .State.Health}}yes{{else}}no{{end}}' "${cid}" 2>/dev/null || true)"
 
     for _ in $(seq 1 60); do
         status="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "${cid}" 2>/dev/null || true)"
@@ -144,10 +159,7 @@ wait_for_odoo_health() {
                 return 0
                 ;;
             running)
-                # Fallback for a project without a Docker healthcheck.
-                if ! docker inspect --format '{{if .State.Health}}yes{{else}}no{{end}}' "${cid}" | grep -qx yes; then
-                    return 0
-                fi
+                [[ "${has_health}" == "no" ]] && return 0
                 ;;
             unhealthy|exited|dead)
                 return 1
@@ -171,28 +183,38 @@ restart_original_service() {
     fi
 }
 
-UPGRADE_STARTED=0
+OPERATION_STARTED=0
+HISTORY_STARTED=0
 cleanup_on_error() {
     local rc=$?
-    if (( rc != 0 && UPGRADE_STARTED == 1 )); then
+
+    if (( HISTORY_STARTED == 1 )); then
+        printf '%s database=%s modules=%s status=FAILED exit_code=%s\n' \
+          "$(date -Is)" "${DB_NAME}" "${MODULES}" "${rc}" \
+          >> logs/module-upgrade-history.log || true
+    fi
+
+    if (( rc != 0 && OPERATION_STARTED == 1 )); then
         printf '[upgrade-module] Upgrade failed. Attempting to restore the previous Odoo runtime state.\n' >&2
         restart_original_service || true
     fi
+
     exit "${rc}"
 }
 trap cleanup_on_error ERR
+
+OPERATION_STARTED=1
 
 if (( ODOO_WAS_RUNNING == 1 )); then
     log "Stopping Odoo only; PostgreSQL remains online..."
     docker compose stop odoo19
 fi
 
-UPGRADE_STARTED=1
-STAMP="$(date +%Y%m%d-%H%M%S)"
 mkdir -p logs
-{
-    printf '%s database=%s modules=%s status=STARTED\n' "$(date -Is)" "${DB_NAME}" "${MODULES}"
-} >> logs/module-upgrade-history.log
+HISTORY_STARTED=1
+printf '%s database=%s modules=%s status=STARTED\n' \
+  "$(date -Is)" "${DB_NAME}" "${MODULES}" \
+  >> logs/module-upgrade-history.log
 
 log "Upgrading module(s): ${MODULES}"
 docker compose run --rm --no-deps odoo19 \
@@ -205,9 +227,9 @@ docker compose run --rm --no-deps odoo19 \
     --workers=0 \
     --max-cron-threads=0
 
-{
-    printf '%s database=%s modules=%s status=UPGRADE_OK\n' "$(date -Is)" "${DB_NAME}" "${MODULES}"
-} >> logs/module-upgrade-history.log
+printf '%s database=%s modules=%s status=UPGRADE_OK\n' \
+  "$(date -Is)" "${DB_NAME}" "${MODULES}" \
+  >> logs/module-upgrade-history.log
 
 trap - ERR
 
@@ -215,6 +237,9 @@ if (( ODOO_WAS_RUNNING == 1 )); then
     log "Starting Odoo and waiting for health..."
     docker compose up -d --no-deps odoo19
     if ! wait_for_odoo_health; then
+        printf '%s database=%s modules=%s status=POST_UPGRADE_HEALTH_FAILED\n' \
+          "$(date -Is)" "${DB_NAME}" "${MODULES}" \
+          >> logs/module-upgrade-history.log || true
         printf '[upgrade-module] ERROR: Module upgrade completed, but Odoo did not become healthy after restart.\n' >&2
         docker compose ps >&2 || true
         docker compose logs --tail=120 odoo19 >&2 || true
@@ -222,9 +247,9 @@ if (( ODOO_WAS_RUNNING == 1 )); then
     fi
 fi
 
-{
-    printf '%s database=%s modules=%s status=COMPLETE\n' "$(date -Is)" "${DB_NAME}" "${MODULES}"
-} >> logs/module-upgrade-history.log
+printf '%s database=%s modules=%s status=COMPLETE\n' \
+  "$(date -Is)" "${DB_NAME}" "${MODULES}" \
+  >> logs/module-upgrade-history.log
 
 log "Module upgrade completed successfully."
 log "Database: ${DB_NAME}"
